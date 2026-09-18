@@ -1,0 +1,126 @@
+-- Apply together with schema.sql before exposing the Data API.
+ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.profiles FROM anon, authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.profiles TO authenticated;
+GRANT ALL ON public.profiles TO service_role;
+CREATE POLICY profiles_select ON public.profiles FOR SELECT TO authenticated USING (id = (select auth.uid())) ;
+CREATE POLICY profiles_insert ON public.profiles FOR INSERT TO authenticated  WITH CHECK (id = (select auth.uid()));
+CREATE POLICY profiles_update ON public.profiles FOR UPDATE TO authenticated USING (id = (select auth.uid())) WITH CHECK (id = (select auth.uid()));
+CREATE POLICY profiles_delete ON public.profiles FOR DELETE TO authenticated USING (id = (select auth.uid())) ;
+
+ALTER TABLE public.exercise_library ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.exercise_library FROM anon, authenticated;
+GRANT SELECT ON public.exercise_library TO authenticated;
+GRANT ALL ON public.exercise_library TO service_role;
+CREATE POLICY exercise_library_select ON public.exercise_library FOR SELECT TO authenticated USING (true) ;
+REVOKE ALL ON SEQUENCE public.exercise_library_id_seq FROM anon;
+GRANT USAGE, SELECT ON SEQUENCE public.exercise_library_id_seq TO authenticated;
+GRANT ALL ON SEQUENCE public.exercise_library_id_seq TO service_role;
+
+ALTER TABLE public.members ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.members FROM anon, authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.members TO authenticated;
+GRANT ALL ON public.members TO service_role;
+CREATE POLICY members_select ON public.members FOR SELECT TO authenticated USING (coach_id = (select auth.uid())) ;
+CREATE POLICY members_insert ON public.members FOR INSERT TO authenticated  WITH CHECK (coach_id = (select auth.uid()));
+CREATE POLICY members_update ON public.members FOR UPDATE TO authenticated USING (coach_id = (select auth.uid())) WITH CHECK (coach_id = (select auth.uid()));
+CREATE POLICY members_delete ON public.members FOR DELETE TO authenticated USING (coach_id = (select auth.uid())) ;
+REVOKE ALL ON SEQUENCE public.members_id_seq FROM anon;
+GRANT USAGE, SELECT ON SEQUENCE public.members_id_seq TO authenticated;
+GRANT ALL ON SEQUENCE public.members_id_seq TO service_role;
+
+ALTER TABLE public.body_measurements ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.body_measurements FROM anon, authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.body_measurements TO authenticated;
+GRANT ALL ON public.body_measurements TO service_role;
+CREATE POLICY body_measurements_select ON public.body_measurements FOR SELECT TO authenticated USING (coach_id = (select auth.uid()) AND EXISTS (SELECT 1 FROM public.members m WHERE m.id = body_measurements.member_id AND m.coach_id = (select auth.uid()))) ;
+CREATE POLICY body_measurements_insert ON public.body_measurements FOR INSERT TO authenticated  WITH CHECK (coach_id = (select auth.uid()) AND EXISTS (SELECT 1 FROM public.members m WHERE m.id = body_measurements.member_id AND m.coach_id = (select auth.uid())));
+CREATE POLICY body_measurements_update ON public.body_measurements FOR UPDATE TO authenticated USING (coach_id = (select auth.uid()) AND EXISTS (SELECT 1 FROM public.members m WHERE m.id = body_measurements.member_id AND m.coach_id = (select auth.uid()))) WITH CHECK (coach_id = (select auth.uid()) AND EXISTS (SELECT 1 FROM public.members m WHERE m.id = body_measurements.member_id AND m.coach_id = (select auth.uid())));
+CREATE POLICY body_measurements_delete ON public.body_measurements FOR DELETE TO authenticated USING (coach_id = (select auth.uid()) AND EXISTS (SELECT 1 FROM public.members m WHERE m.id = body_measurements.member_id AND m.coach_id = (select auth.uid()))) ;
+REVOKE ALL ON SEQUENCE public.body_measurements_id_seq FROM anon;
+GRANT USAGE, SELECT ON SEQUENCE public.body_measurements_id_seq TO authenticated;
+GRANT ALL ON SEQUENCE public.body_measurements_id_seq TO service_role;
+
+ALTER TABLE public.training_sessions ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.training_sessions FROM anon, authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.training_sessions TO authenticated;
+GRANT ALL ON public.training_sessions TO service_role;
+CREATE POLICY training_sessions_select ON public.training_sessions FOR SELECT TO authenticated USING (coach_id = (select auth.uid()) AND EXISTS (SELECT 1 FROM public.members m WHERE m.id = training_sessions.member_id AND m.coach_id = (select auth.uid()))) ;
+CREATE POLICY training_sessions_insert ON public.training_sessions FOR INSERT TO authenticated  WITH CHECK (coach_id = (select auth.uid()) AND EXISTS (SELECT 1 FROM public.members m WHERE m.id = training_sessions.member_id AND m.coach_id = (select auth.uid())));
+CREATE POLICY training_sessions_update ON public.training_sessions FOR UPDATE TO authenticated USING (coach_id = (select auth.uid()) AND EXISTS (SELECT 1 FROM public.members m WHERE m.id = training_sessions.member_id AND m.coach_id = (select auth.uid()))) WITH CHECK (coach_id = (select auth.uid()) AND EXISTS (SELECT 1 FROM public.members m WHERE m.id = training_sessions.member_id AND m.coach_id = (select auth.uid())));
+CREATE POLICY training_sessions_delete ON public.training_sessions FOR DELETE TO authenticated USING (coach_id = (select auth.uid()) AND EXISTS (SELECT 1 FROM public.members m WHERE m.id = training_sessions.member_id AND m.coach_id = (select auth.uid()))) ;
+REVOKE ALL ON SEQUENCE public.training_sessions_id_seq FROM anon;
+GRANT USAGE, SELECT ON SEQUENCE public.training_sessions_id_seq TO authenticated;
+GRANT ALL ON SEQUENCE public.training_sessions_id_seq TO service_role;
+
+ALTER TABLE public.training_session_exercises ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.training_session_exercises FROM anon, authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.training_session_exercises TO authenticated;
+GRANT ALL ON public.training_session_exercises TO service_role;
+CREATE POLICY training_session_exercises_select ON public.training_session_exercises FOR SELECT TO authenticated USING (EXISTS (SELECT 1 FROM public.training_sessions p WHERE p.id = training_session_exercises.session_id AND p.coach_id = (select auth.uid()))) ;
+CREATE POLICY training_session_exercises_insert ON public.training_session_exercises FOR INSERT TO authenticated  WITH CHECK (EXISTS (SELECT 1 FROM public.training_sessions p WHERE p.id = training_session_exercises.session_id AND p.coach_id = (select auth.uid())));
+CREATE POLICY training_session_exercises_update ON public.training_session_exercises FOR UPDATE TO authenticated USING (EXISTS (SELECT 1 FROM public.training_sessions p WHERE p.id = training_session_exercises.session_id AND p.coach_id = (select auth.uid()))) WITH CHECK (EXISTS (SELECT 1 FROM public.training_sessions p WHERE p.id = training_session_exercises.session_id AND p.coach_id = (select auth.uid())));
+CREATE POLICY training_session_exercises_delete ON public.training_session_exercises FOR DELETE TO authenticated USING (EXISTS (SELECT 1 FROM public.training_sessions p WHERE p.id = training_session_exercises.session_id AND p.coach_id = (select auth.uid()))) ;
+REVOKE ALL ON SEQUENCE public.training_session_exercises_id_seq FROM anon;
+GRANT USAGE, SELECT ON SEQUENCE public.training_session_exercises_id_seq TO authenticated;
+GRANT ALL ON SEQUENCE public.training_session_exercises_id_seq TO service_role;
+
+ALTER TABLE public.ai_analysis_reports ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.ai_analysis_reports FROM anon, authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.ai_analysis_reports TO authenticated;
+GRANT ALL ON public.ai_analysis_reports TO service_role;
+CREATE POLICY ai_analysis_reports_select ON public.ai_analysis_reports FOR SELECT TO authenticated USING (coach_id = (select auth.uid()) AND EXISTS (SELECT 1 FROM public.members m WHERE m.id = ai_analysis_reports.member_id AND m.coach_id = (select auth.uid()))) ;
+CREATE POLICY ai_analysis_reports_insert ON public.ai_analysis_reports FOR INSERT TO authenticated  WITH CHECK (coach_id = (select auth.uid()) AND EXISTS (SELECT 1 FROM public.members m WHERE m.id = ai_analysis_reports.member_id AND m.coach_id = (select auth.uid())));
+CREATE POLICY ai_analysis_reports_update ON public.ai_analysis_reports FOR UPDATE TO authenticated USING (coach_id = (select auth.uid()) AND EXISTS (SELECT 1 FROM public.members m WHERE m.id = ai_analysis_reports.member_id AND m.coach_id = (select auth.uid()))) WITH CHECK (coach_id = (select auth.uid()) AND EXISTS (SELECT 1 FROM public.members m WHERE m.id = ai_analysis_reports.member_id AND m.coach_id = (select auth.uid())));
+CREATE POLICY ai_analysis_reports_delete ON public.ai_analysis_reports FOR DELETE TO authenticated USING (coach_id = (select auth.uid()) AND EXISTS (SELECT 1 FROM public.members m WHERE m.id = ai_analysis_reports.member_id AND m.coach_id = (select auth.uid()))) ;
+REVOKE ALL ON SEQUENCE public.ai_analysis_reports_id_seq FROM anon;
+GRANT USAGE, SELECT ON SEQUENCE public.ai_analysis_reports_id_seq TO authenticated;
+GRANT ALL ON SEQUENCE public.ai_analysis_reports_id_seq TO service_role;
+
+ALTER TABLE public.training_plans ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.training_plans FROM anon, authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.training_plans TO authenticated;
+GRANT ALL ON public.training_plans TO service_role;
+CREATE POLICY training_plans_select ON public.training_plans FOR SELECT TO authenticated USING (coach_id = (select auth.uid()) AND EXISTS (SELECT 1 FROM public.members m WHERE m.id = training_plans.member_id AND m.coach_id = (select auth.uid()))) ;
+CREATE POLICY training_plans_insert ON public.training_plans FOR INSERT TO authenticated  WITH CHECK (coach_id = (select auth.uid()) AND EXISTS (SELECT 1 FROM public.members m WHERE m.id = training_plans.member_id AND m.coach_id = (select auth.uid())));
+CREATE POLICY training_plans_update ON public.training_plans FOR UPDATE TO authenticated USING (coach_id = (select auth.uid()) AND EXISTS (SELECT 1 FROM public.members m WHERE m.id = training_plans.member_id AND m.coach_id = (select auth.uid()))) WITH CHECK (coach_id = (select auth.uid()) AND EXISTS (SELECT 1 FROM public.members m WHERE m.id = training_plans.member_id AND m.coach_id = (select auth.uid())));
+CREATE POLICY training_plans_delete ON public.training_plans FOR DELETE TO authenticated USING (coach_id = (select auth.uid()) AND EXISTS (SELECT 1 FROM public.members m WHERE m.id = training_plans.member_id AND m.coach_id = (select auth.uid()))) ;
+REVOKE ALL ON SEQUENCE public.training_plans_id_seq FROM anon;
+GRANT USAGE, SELECT ON SEQUENCE public.training_plans_id_seq TO authenticated;
+GRANT ALL ON SEQUENCE public.training_plans_id_seq TO service_role;
+
+ALTER TABLE public.training_plan_exercises ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.training_plan_exercises FROM anon, authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.training_plan_exercises TO authenticated;
+GRANT ALL ON public.training_plan_exercises TO service_role;
+CREATE POLICY training_plan_exercises_select ON public.training_plan_exercises FOR SELECT TO authenticated USING (EXISTS (SELECT 1 FROM public.training_plans p WHERE p.id = training_plan_exercises.plan_id AND p.coach_id = (select auth.uid()))) ;
+CREATE POLICY training_plan_exercises_insert ON public.training_plan_exercises FOR INSERT TO authenticated  WITH CHECK (EXISTS (SELECT 1 FROM public.training_plans p WHERE p.id = training_plan_exercises.plan_id AND p.coach_id = (select auth.uid())));
+CREATE POLICY training_plan_exercises_update ON public.training_plan_exercises FOR UPDATE TO authenticated USING (EXISTS (SELECT 1 FROM public.training_plans p WHERE p.id = training_plan_exercises.plan_id AND p.coach_id = (select auth.uid()))) WITH CHECK (EXISTS (SELECT 1 FROM public.training_plans p WHERE p.id = training_plan_exercises.plan_id AND p.coach_id = (select auth.uid())));
+CREATE POLICY training_plan_exercises_delete ON public.training_plan_exercises FOR DELETE TO authenticated USING (EXISTS (SELECT 1 FROM public.training_plans p WHERE p.id = training_plan_exercises.plan_id AND p.coach_id = (select auth.uid()))) ;
+REVOKE ALL ON SEQUENCE public.training_plan_exercises_id_seq FROM anon;
+GRANT USAGE, SELECT ON SEQUENCE public.training_plan_exercises_id_seq TO authenticated;
+GRANT ALL ON SEQUENCE public.training_plan_exercises_id_seq TO service_role;
+
+ALTER TABLE public.appointments ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.appointments FROM anon, authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.appointments TO authenticated;
+GRANT ALL ON public.appointments TO service_role;
+CREATE POLICY appointments_select ON public.appointments FOR SELECT TO authenticated USING (coach_id = (select auth.uid()) AND EXISTS (SELECT 1 FROM public.members m WHERE m.id = appointments.member_id AND m.coach_id = (select auth.uid()))) ;
+CREATE POLICY appointments_insert ON public.appointments FOR INSERT TO authenticated  WITH CHECK (coach_id = (select auth.uid()) AND EXISTS (SELECT 1 FROM public.members m WHERE m.id = appointments.member_id AND m.coach_id = (select auth.uid())));
+CREATE POLICY appointments_update ON public.appointments FOR UPDATE TO authenticated USING (coach_id = (select auth.uid()) AND EXISTS (SELECT 1 FROM public.members m WHERE m.id = appointments.member_id AND m.coach_id = (select auth.uid()))) WITH CHECK (coach_id = (select auth.uid()) AND EXISTS (SELECT 1 FROM public.members m WHERE m.id = appointments.member_id AND m.coach_id = (select auth.uid())));
+CREATE POLICY appointments_delete ON public.appointments FOR DELETE TO authenticated USING (coach_id = (select auth.uid()) AND EXISTS (SELECT 1 FROM public.members m WHERE m.id = appointments.member_id AND m.coach_id = (select auth.uid()))) ;
+REVOKE ALL ON SEQUENCE public.appointments_id_seq FROM anon;
+GRANT USAGE, SELECT ON SEQUENCE public.appointments_id_seq TO authenticated;
+GRANT ALL ON SEQUENCE public.appointments_id_seq TO service_role;
+
+ALTER TABLE public.training_session_photos ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.training_session_photos FROM anon, authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.training_session_photos TO authenticated;
+GRANT ALL ON public.training_session_photos TO service_role;
+CREATE POLICY training_session_photos_select ON public.training_session_photos FOR SELECT TO authenticated USING (coach_id = (select auth.uid()) AND EXISTS (SELECT 1 FROM public.members m WHERE m.id = training_session_photos.member_id AND m.coach_id = (select auth.uid()))) ;
+CREATE POLICY training_session_photos_insert ON public.training_session_photos FOR INSERT TO authenticated  WITH CHECK (coach_id = (select auth.uid()) AND EXISTS (SELECT 1 FROM public.members m WHERE m.id = training_session_photos.member_id AND m.coach_id = (select auth.uid())));
+CREATE POLICY training_session_photos_update ON public.training_session_photos FOR UPDATE TO authenticated USING (coach_id = (select auth.uid()) AND EXISTS (SELECT 1 FROM public.members m WHERE m.id = training_session_photos.member_id AND m.coach_id = (select auth.uid()))) WITH CHECK (coach_id = (select auth.uid()) AND EXISTS (SELECT 1 FROM public.members m WHERE m.id = training_session_photos.member_id AND m.coach_id = (select auth.uid())));
+CREATE POLICY training_session_photos_delete ON public.training_session_photos FOR DELETE TO authenticated USING (coach_id = (select auth.uid()) AND EXISTS (SELECT 1 FROM public.members m WHERE m.id = training_session_photos.member_id AND m.coach_id = (select auth.uid()))) ;
+REVOKE ALL ON SEQUENCE public.training_session_photos_id_seq FROM anon;
+GRANT USAGE, SELECT ON SEQUENCE public.training_session_photos_id_seq TO authenticated;
+GRANT ALL ON SEQUENCE public.training_session_photos_id_seq TO service_role;

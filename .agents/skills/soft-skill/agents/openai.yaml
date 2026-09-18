@@ -1,0 +1,4 @@
+interface:
+  display_name: "High-End Visual Design"
+  short_description: "Create polished agency-quality interfaces"
+  default_prompt: "Use $high-end-visual-design to create a polished agency-quality interface."

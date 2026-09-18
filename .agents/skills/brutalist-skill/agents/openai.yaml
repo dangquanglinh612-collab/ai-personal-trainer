@@ -1,0 +1,4 @@
+interface:
+  display_name: "Industrial Brutalist UI"
+  short_description: "Design raw, mechanical brutalist interfaces"
+  default_prompt: "Use $industrial-brutalist-ui to design a raw industrial-brutalist interface."

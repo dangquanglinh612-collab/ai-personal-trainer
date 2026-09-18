@@ -1,0 +1,4 @@
+interface:
+  display_name: "GPT Taste"
+  short_description: "Build expressive interfaces with advanced motion"
+  default_prompt: "Use $gpt-taste to build an expressive interface with advanced motion."

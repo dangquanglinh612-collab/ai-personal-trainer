@@ -1,0 +1,4 @@
+interface:
+  display_name: "Web UI Image Direction"
+  short_description: "Generate premium website section concepts"
+  default_prompt: "Use $imagegen-frontend-web to generate a visual concept for every website section."

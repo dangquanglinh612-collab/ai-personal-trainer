@@ -1,0 +1,4 @@
+interface:
+  display_name: "Mobile UI Image Direction"
+  short_description: "Generate premium mobile app screen concepts"
+  default_prompt: "Use $imagegen-frontend-mobile to generate premium mobile app screen concepts."

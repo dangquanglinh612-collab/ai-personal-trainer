@@ -1,0 +1,4 @@
+interface:
+  display_name: "Brand Kit Designer"
+  short_description: "Create premium visual brand-kit presentations"
+  default_prompt: "Use $brandkit to create a premium visual brand-kit presentation."

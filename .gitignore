@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+.venv/
+venv/
+
+# Local application data and user uploads
+*.db
+uploads/
+
+# Secrets and environment configuration
+.env
+.env.*
+!.env.example
+.streamlit/secrets.toml
+migration_coach_map.json
+migration-reports/
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+backups/
+
+# Platform and editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
