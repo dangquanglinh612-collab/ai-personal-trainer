@@ -5,7 +5,7 @@ from __future__ import annotations
 import streamlit as st
 
 from ...auth import logout
-from ...repositories.member_data import get_member_by_id
+from ...repositories.contracts import CoachContext, CoachReadRepository, MemberDetail
 from ..training_draft import clear_training_parse_state
 
 def render_page_header(eyebrow, title, subtitle):
@@ -59,14 +59,13 @@ def back_to_member_detail():
     st.rerun()
 
 
-def get_current_member():
-    coach_id = st.session_state.coach_id
-    member_id = st.session_state.selected_member_id
-
+def get_current_member(
+    repository: CoachReadRepository, coach: CoachContext
+) -> MemberDetail | None:
+    member_id = st.session_state.get("selected_member_id")
     if member_id is None:
         return None
-
-    return get_member_by_id(coach_id, member_id)
+    return repository.get_member(coach, member_id)
 
 
 def reset_training_state(member_id):

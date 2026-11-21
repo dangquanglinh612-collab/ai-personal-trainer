@@ -14,7 +14,7 @@
 - D：完成剩余 repository 适配和 UI 路由接线，全部双后端回归通过后切换。
 - E：迁移、GitHub 和安全检查完成后部署 Cloud；进行手机验收。
 
-**目前不能仅设置 APP_DATA_BACKEND=supabase 就上线。** 阶段 A 已加 fail-closed 提示，防止配置为 Supabase 却继续写 SQLite。现有 SQLite 页面和保存函数保持原样。
+**目前不能用 Supabase 模式上线。** 默认仍是 SQLite。Supabase 接线仅供独立测试项目验收，当前范围是登录、退出、只读会员目录及详情。配置、认证或查询失败不会回退 SQLite；其余业务页面不会在该模式开放。
 
 ## 下一步 Dashboard 准备（不要发任何 Secret 到聊天）
 
@@ -36,7 +36,7 @@
 
 Schema 是一次性空项目基线：同名表/策略重复执行将报错。这是保护而非“自动升级”；后续变更应另建增量 SQL。需要 `btree_gist` 扩展，用于预约教练 UUID + 半开时间区间的排斥约束。
 
-所有业务表启用 RLS，普通客户端仅 authenticated；公共动作库仅 SELECT。父子表用 RLS + 复合 FK 双重归属保护。`profiles` 首次登录使用忽略冲突的 insert/upsert 初始化，不覆盖现有资料。
+所有业务表启用 RLS，普通客户端仅 authenticated；公共动作库仅 SELECT。父子表用 RLS + 复合 FK 双重归属保护。应用不在登录时写入 `profiles`，也不以 profile 是否存在判断教练授权。
 
 ## 本地配置和依赖
 
@@ -44,7 +44,11 @@ Schema 是一次性空项目基线：同名表/策略重复执行将报错。这
 
 使用 Python 3.12，`python -m pip install -e .`。`requirements.txt` 继续只有 `-e .`，依赖统一维护在 pyproject.toml，包括 supabase 2.x。不要在 requirements 另维护一份版本列表。
 
-客户端构造只接受新 Publishable Key；旧 key 项目需先在 Dashboard 创建新 key，不默认启用 legacy 兼容。每个浏览器 session_state 保存必要 token，不缓存登录 client、不使用全局 st.cache_resource。rerun 使用新客户端 set_session 恢复/刷新 token，并向 Auth 校验 user；失败清理全部状态。页面整页刷新若重建 Streamlit session，预期重新登录，不承诺跨新浏览器 session 持久登录。
+配置优先读取 Streamlit secrets，再读环境变量。后续验收时，`SUPABASE_TEST_PROJECT_REF` 必须取自独立测试项目 Dashboard，且与 `SUPABASE_URL` 精确匹配；`SUPABASE_PUBLISHABLE_KEY` 只接受 Publishable Key。`SUPABASE_ALLOWED_COACH_IDS` 是管理员配置的逗号分隔 Auth UUID，空名单、无效配置和非名单账号均拒绝准入。不提供公开注册；真实验收前由管理员在 Dashboard 确认关闭公开注册和匿名登录。不把此应用白名单当作 Data API 的数据库授权；开放更多业务前需另行审查数据库层授权。
+
+每个浏览器的 session state 保存必要 token，不全局缓存客户端。每次 rerun 由会话层构造一个客户端，显式刷新临期或过期 token，再验证 UUID 并同步保存 token；仓储复用该客户端且不触发 Auth 刷新。退出尝试撤销当前会话并清除本地状态。页面整页刷新若重建 Streamlit session，预期重新登录。
+
+`services/supabase_auth.py` 负责登录、恢复、刷新和撤销当前 Supabase 会话。`login()` 与 `restore()` 返回配对的客户端和认证快照。调用方负责保存新快照、在恢复失败时丢弃旧快照并停止使用其客户端，以及在退出时清理本地状态。Streamlit 的 `SupabaseSession` 负责这些状态操作，仍可从原有的 `services/supabase_client.py` 导入。
 
 ## 迁移：先 dry-run，再经确认 execute
 
@@ -71,7 +75,7 @@ Schema 是一次性空项目基线：同名表/策略重复执行将报错。这
 
 ## 阶段 D 尚需完成的接线
 
-独立 `SupabaseSession` / `SupabaseRepository` 已准备，但不是全业务 SQLite repository 的即插即用替代品。当前示范接口覆盖会员读取/创建、训练原子保存、预约创建、照片上传/签名 URL。后续需要将会员编辑/续课、身体数据、训练历史与子项、AI报告/计划存取、预约编辑/状态/查询适配为现有 tuple/dict 格式，计划头+子项保存亦须事务 RPC。登录页仅在 Supabase backend 使用邮箱密码；照片历史改用 signed URL。完成后才解除阶段 A 后端保护。
+`SupabaseRepository` 已由后端工厂绑定到当前认证用户，但不是全业务 SQLite repository 的即插即用替代品。适配器已有会员读取/创建、动作库、训练历史与原子保存、预约创建、照片上传/签名 URL。当前页面只接通会员读取。经真实隔离验收后，再逐步接入会员写入、身体数据、训练保存与照片、AI 报告/计划、预约修改与查询。计划头与子项保存需要事务；照片历史使用短期 signed URL。
 
 训练 RPC 的创建逻辑：锁定会员 → 检查同日记录 → 插入训练与动作 → 按原规则扣课和更新日期，异常全部回滚。更新不扣课，也不额外修改原 SQLite 更新流程未修改的会员日期。没有新增持久幂等 token：超时后不可盲目重试创建；应先查询是否已保存。直接删除训练记录会影响同日存在性判断，保持现有 MVP 的规则，不擅自新增扣课流水功能。
 
@@ -88,7 +92,22 @@ Schema 是一次性空项目基线：同名表/策略重复执行将报错。这
 
 ## 测试与验收
 
-离线：`python -m unittest discover -s tests -v`。真实集成默认 skip；阶段 B 专用测试项目设置 `RUN_SUPABASE_INTEGRATION_TESTS=1`、`SUPABASE_TEST_PROJECT_REF`、两组 `SUPABASE_TEST_EMAIL_A/B` 与 `SUPABASE_TEST_PASSWORD_A/B` 后才运行 `test_supabase_integration.py`。账号信息只放本地环境变量。测试会创建隔离测试会员及子记录、上传测试照片并清理，不在生产项目运行。
+### Stage 2：双教练只读验收
+
+先在 Dashboard 人工核对 `ai-coach-os-phase2-test` 的准确项目 ref。在本地测试进程使用 `SUPABASE_TEST_PROJECT_REF`、`SUPABASE_TEST_URL` 和 `SUPABASE_TEST_PUBLISHABLE_KEY`；不得复用未核实的项目配置或 Secret Key。
+
+管理员须预先准备两个独立的 Auth 账号和各自名下至少一条测试会员记录。两名教练的 UUID 都必须在应用实际配置的 `SUPABASE_ALLOWED_COACH_IDS` 中；将同一份白名单传入测试进程。另设置每组 `SUPABASE_TEST_UUID_A/B`、`SUPABASE_TEST_EMAIL_A/B`、`SUPABASE_TEST_PASSWORD_A/B`、`SUPABASE_TEST_MEMBER_ID_A/B`。缺少任何条件时不要启用测试，也不要由测试创建数据。
+
+确认上述条件且只批准查询后，单独运行：
+
+```powershell
+$env:RUN_SUPABASE_MEMBER_RLS_SELECT_TESTS = '1'
+python -B -m unittest discover -s tests -p test_supabase_member_rls.py
+```
+
+测试登录 Auth 后只对会员表发出 SELECT：分别验证自己的列表与详情、对方的 ID 和对方的 `coach_id` 条件，并通过相同用户 JWT 直接查询 Data API（不经过仓储的归属过滤）验证远端隔离。它不执行 SQL、不创建或清理数据。此阶段不要运行下方含写入的集成测试。
+
+离线：`python -m unittest discover -s tests -v`。真实集成默认 skip；阶段 B 专用测试项目须经批准，设置 `RUN_SUPABASE_INTEGRATION_TESTS=1`、`SUPABASE_TEST_PROJECT_REF`、两组 `SUPABASE_TEST_UUID_A/B`、`SUPABASE_TEST_EMAIL_A/B` 与 `SUPABASE_TEST_PASSWORD_A/B`，并配置匹配的 URL 和 Publishable Key，才运行 `test_supabase_integration.py`。账号信息只放本地环境变量。测试会创建隔离测试会员及子记录、上传测试照片并清理，不在生产项目运行。
 
 真实验收必须包括：两账号 CRUD RLS、子表与跨会员 FK、Storage 跨账号下载/覆盖/删除拒绝、JWT 刷新与退出、并发训练事务及失败回滚、预约并发、序列新增 ID、照片失败不影响训练、52项既有业务回归。Cloud 及手机还需测试登录、会员、AI智能粘贴、训练保存/历史、课表、照片；当前未取得线上 URL，未作手机验收。
 

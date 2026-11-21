@@ -1,97 +1,98 @@
-"""Stage A session-local Supabase adapter; not wired into the SQLite UI yet."""
+"""Supabase repositories and compatibility imports for authentication."""
 
-from dataclasses import dataclass, field
-from urllib.parse import urlparse
-from uuid import UUID, uuid4
+from uuid import uuid4
 
+from ..repositories.contracts import (
+    CoachContext,
+    ExerciseOption,
+    MemberDetail,
+    MemberSummary,
+    TrainingHistoryExercise,
+    TrainingHistoryItem,
+    require_coach,
+)
+from .streamlit_session import SupabaseSession as SupabaseSession
+from .supabase_auth import (
+    AuthenticatedSupabase as AuthenticatedSupabase,
+    CoachNotAllowed as CoachNotAllowed,
+    SupabaseSettings as SupabaseSettings,
+    create_public_client as create_public_client,
+)
 
-@dataclass(frozen=True)
-class SupabaseSettings:
-    url: str
-    publishable_key: str = field(repr=False)
-
-    def __post_init__(self):
-        parsed = urlparse(self.url)
-        if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.query or parsed.path or parsed.fragment:
-            raise ValueError("SUPABASE_URL 必须是 HTTPS 项目根地址")
-        if not self.publishable_key.startswith("sb_publishable_"):
-            raise ValueError("请配置 Publishable Key，禁止使用 Secret Key 作为应用客户端")
-
-    @classmethod
-    def from_mapping(cls, values):
-        url = str(values.get("SUPABASE_URL", "")).rstrip("/")
-        key = str(values.get("SUPABASE_PUBLISHABLE_KEY", ""))
-        return cls(url, key)
-
-
-def create_public_client(settings):
-    # No global cache, no disk session storage, no background refresh thread.
-    from supabase import ClientOptions, create_client
-    return create_client(settings.url, settings.publishable_key, options=ClientOptions(
-        persist_session=False, auto_refresh_token=False,
-    ))
-
-
-class SupabaseSession:
-    """Instantiate per rerun with that browser's session_state, never cache globally."""
-
-    def __init__(self, settings, state, factory=create_public_client):
-        self.settings, self.state, self.factory = settings, state, factory
-
-    def _accept(self, client, response):
-        session = response.session
-        user = client.auth.get_user(session.access_token).user
-        user_id = str(UUID(user.id))
-        previous = self.state.get("coach_id")
-        if previous and previous != user_id:
-            self.state.clear()
-        self.state.update({"auth_user": {"id": user_id}, "coach_id": user_id,
-                           "access_token": session.access_token,
-                           "refresh_token": session.refresh_token, "logged_in": True})
-        return client
-
-    def login(self, email, password):
-        self.state.clear()
-        try:
-            client = self.factory(self.settings)
-            response = client.auth.sign_in_with_password({"email": email, "password": password})
-            self._accept(client, response)
-            client.table("profiles").upsert(
-                {"id": self.state["coach_id"]}, on_conflict="id", ignore_duplicates=True,
-            ).execute()
-            return client
-        except Exception:
-            self.state.clear()
-            raise ValueError("登录失败，请检查账号、密码或网络连接。") from None
-
-    def restore(self):
-        try:
-            client = self.factory(self.settings)
-            response = client.auth.set_session(self.state["access_token"], self.state["refresh_token"])
-            return self._accept(client, response)
-        except Exception:
-            self.state.clear()
-            raise ValueError("登录状态失效，请重新登录。") from None
-
-    def logout(self):
-        try:
-            self.restore().auth.sign_out()
-        except Exception:
-            pass
-        finally:
-            # Includes tokens, plan_* widgets, member forms and TASK 9 drafts.
-            self.state.clear()
+_MEMBER_FIELDS = "id,name,remaining_lessons,goal,last_training_date,ai_reminder"
+_HISTORY_FIELDS = (
+    "id,training_date,member_feedback,coach_note,raw_paste_text,created_at,"
+    "training_session_exercises(exercise_name,weight,sets,reps,rpe,note,sort_order)"
+)
 
 
 class SupabaseRepository:
-    """Independent stage-A interface. Identity comes from Auth, not page arguments."""
+    """Authenticated reads and existing Stage A operations."""
 
-    def __init__(self, client):
-        self.client = client
-        self.coach_id = str(UUID(client.auth.get_user().user.id))
+    def __init__(self, authenticated: AuthenticatedSupabase):
+        self.client = authenticated.client
+        self.coach_id = authenticated.coach.coach_id
+
+    def _require_owner(self, coach: CoachContext) -> str:
+        if require_coach(coach) != self.coach_id:
+            raise PermissionError("教练上下文与当前登录用户不一致。")
+        return self.coach_id
+
+    def _member_query(self, columns: str):
+        return self.client.table("members").select(columns).eq("coach_id", self.coach_id)
+
+    def list_members(self, coach: CoachContext) -> list[MemberSummary]:
+        self._require_owner(coach)
+        rows = self._member_query(_MEMBER_FIELDS).order("id", desc=True).execute().data
+        return [MemberSummary(**row, today_plan_available=False) for row in rows]
+
+    def get_member(self, coach: CoachContext, member_id: int) -> MemberDetail | None:
+        self._require_owner(coach)
+        if type(member_id) is not int or not 0 < member_id < 2**63:
+            raise ValueError("会员编号无效。")
+        rows = (
+            self._member_query(f"{_MEMBER_FIELDS},phone,note,created_at,avatar_emoji")
+            .eq("id", member_id)
+            .limit(1)
+            .execute().data
+        )
+        return MemberDetail(**rows[0]) if rows else None
+
+    def list_training_history(
+        self, coach: CoachContext, member_id: int,
+    ) -> list[TrainingHistoryItem]:
+        coach_id = self._require_owner(coach)
+        child_relation = "training_session_exercises"
+        rows = (
+            self.client.table("training_sessions")
+            .select(_HISTORY_FIELDS)
+            .eq("coach_id", coach_id)
+            .eq("member_id", member_id)
+            .order("training_date", desc=True)
+            .order("id", desc=True)
+            .order("sort_order", nullsfirst=True, foreign_table=child_relation)
+            .order("id", foreign_table=child_relation)
+            .execute().data
+        )
+        history = []
+        for row in rows:
+            exercises = tuple(TrainingHistoryExercise(**item) for item in row[child_relation])
+            session = {key: value for key, value in row.items() if key != child_relation}
+            history.append(TrainingHistoryItem(**session, exercises=exercises))
+        return history
+
+    def list_exercises(self, coach: CoachContext) -> list[ExerciseOption]:
+        self._require_owner(coach)
+        rows = (
+            self.client.table("exercise_library")
+            .select("id,name")
+            .order("id")
+            .execute().data
+        )
+        return [ExerciseOption(**row) for row in rows]
 
     def get_members_for_coach(self):
-        return self.client.table("members").select("*").eq("coach_id", self.coach_id).order("id").execute().data
+        return self._member_query("*").order("id").execute().data
 
     def add_member(self, name, remaining_lessons, goal):
         return self.client.table("members").insert({

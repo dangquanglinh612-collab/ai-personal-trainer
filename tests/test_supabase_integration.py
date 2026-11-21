@@ -18,16 +18,20 @@ from ai_coach_os.services.supabase_client import SupabaseSettings, SupabaseSessi
 class SupabaseIntegrationTests(unittest.TestCase):
     def test_two_users_rls_storage_transactions_and_conflicts(self):
         ref = os.environ["SUPABASE_TEST_PROJECT_REF"]
-        self.assertEqual(os.environ["SUPABASE_URL"].rstrip("/"), f"https://{ref}.supabase.co")
+        self.assertTrue(os.environ["SUPABASE_URL"].rstrip("/") == f"https://{ref}.supabase.co",
+                        "Integration URL must match the configured test ref")
         settings = SupabaseSettings.from_mapping(os.environ)
         state_a, state_b = {}, {}
-        session_a, session_b = SupabaseSession(settings, state_a), SupabaseSession(settings, state_b)
-        a = session_a.login(os.environ["SUPABASE_TEST_EMAIL_A"], os.environ["SUPABASE_TEST_PASSWORD_A"])
+        allowed = {os.environ["SUPABASE_TEST_UUID_A"], os.environ["SUPABASE_TEST_UUID_B"]}
+        session_a = SupabaseSession(settings, state_a, allowed)
+        session_b = SupabaseSession(settings, state_b, allowed)
+        authenticated_a = session_a.login(os.environ["SUPABASE_TEST_EMAIL_A"], os.environ["SUPABASE_TEST_PASSWORD_A"])
+        a = authenticated_a.client
         self.addCleanup(session_a.logout)
-        b = session_b.login(os.environ["SUPABASE_TEST_EMAIL_B"], os.environ["SUPABASE_TEST_PASSWORD_B"])
+        b = session_b.login(os.environ["SUPABASE_TEST_EMAIL_B"], os.environ["SUPABASE_TEST_PASSWORD_B"]).client
         self.addCleanup(session_b.logout)
         self.assertNotEqual(state_a["coach_id"], state_b["coach_id"])
-        repo = SupabaseRepository(a)
+        repo = SupabaseRepository(authenticated_a)
         member = repo.add_member(f"stage-a-integration-{uuid4()}", 5, "test")[0]
         member_id = member["id"]
         # All child records cascade with this test-created member. Storage is separate.

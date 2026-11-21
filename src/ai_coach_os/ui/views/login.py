@@ -7,7 +7,7 @@ import streamlit as st
 from ...auth import verify_coach
 from ..styles import inject_css, inject_login_css
 
-def login_page():
+def login_page(authenticate=None):
     inject_css()
     inject_login_css()
 
@@ -25,12 +25,19 @@ def login_page():
     )
 
     with st.form("login_form"):
-        username = st.text_input("教练账号")
+        username = st.text_input("教练邮箱" if authenticate else "教练账号")
         password = st.text_input("密码", type="password")
         submit = st.form_submit_button("登录", use_container_width=True)
 
         if submit:
-            if verify_coach(username, password):
+            if authenticate:
+                try:
+                    authenticate(username, password)
+                except (ValueError, PermissionError) as error:
+                    st.error(str(error))
+                else:
+                    st.rerun()
+            elif verify_coach(username, password):
                 st.session_state.logged_in = True
                 st.session_state.coach_id = username
                 st.session_state.page = "member_list"
@@ -38,7 +45,8 @@ def login_page():
             else:
                 st.error("账号或密码错误")
 
-    st.info("测试账号：wenwen / 123456，numb / 123456")
+    if authenticate is None:
+        st.info("测试账号：wenwen / 123456，numb / 123456")
 
 
 # =========================

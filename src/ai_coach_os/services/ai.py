@@ -8,6 +8,7 @@ from datetime import date, datetime
 
 import streamlit as st
 
+from ..repositories.contracts import MemberDetail
 from ..repositories.database import get_conn
 
 
@@ -21,6 +22,16 @@ def _ensure_member_belongs_to_coach(cursor, coach_id, member_id):
 
 
 def _member_analysis_fields(member):
+    if isinstance(member, MemberDetail):
+        return {
+            "name": member.name or "未命名会员",
+            "remaining_lessons": member.remaining_lessons,
+            "goal": member.goal,
+            "last_training_date": member.last_training_date,
+            "phone": member.phone,
+            "note": member.note,
+        }
+
     if isinstance(member, dict):
         return {
             "name": member.get("name", "未命名会员"),

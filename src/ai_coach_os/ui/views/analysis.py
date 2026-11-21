@@ -6,11 +6,8 @@ import logging
 
 import streamlit as st
 
-from ...repositories.member_data import (
-    get_exercise_library_names,
-    get_member_by_id,
-    get_recent_training_context,
-)
+from ...repositories.contracts import CoachContext, CoachReadRepository
+from ...repositories.member_data import get_recent_training_context
 from ...services.ai import (
     build_ai_analysis_prompt,
     generate_ai_analysis,
@@ -29,7 +26,7 @@ from .shell import (
 
 logger = logging.getLogger(__name__)
 
-def ai_analysis_page():
+def ai_analysis_page(repository: CoachReadRepository, coach: CoachContext):
     inject_css()
     render_sidebar()
 
@@ -40,9 +37,9 @@ def ai_analysis_page():
             back_to_member_list()
         return
 
-    coach_id = st.session_state.coach_id
-    member = get_member_by_id(coach_id, selected_member_id)
-    if not member:
+    coach_id = coach.coach_id
+    member = repository.get_member(coach, selected_member_id)
+    if member is None:
         st.error("会员不存在或不属于当前教练。")
         if st.button("返回会员列表"):
             back_to_member_list()
@@ -55,36 +52,27 @@ def ai_analysis_page():
         st.session_state.ai_analysis_member_id = selected_member_id
         st.session_state.pop(f"ai_analysis_extra_note_{selected_member_id}", None)
 
-    (
-        member_id,
-        name,
-        remaining_lessons,
-        goal,
-        last_training_date,
-        ai_reminder,
-        phone,
-        note,
-    ) = member
+    member_id = member.id
 
     if st.button("返回会员主页"):
         back_to_member_detail()
 
     render_page_header(
         eyebrow="AI 助教",
-        title=f"AI 分析：{name}",
+        title=f"AI 分析：{member.name}",
         subtitle="基于会员档案、最近训练记录、会员反馈和教练备注，生成训练分析与下次训练建议。"
     )
 
     metric_col_1, metric_col_2, metric_col_3 = st.columns(3)
     with metric_col_1:
-        st.metric("剩余课时", f"{remaining_lessons} 节")
+        st.metric("剩余课时", f"{member.remaining_lessons} 节")
     with metric_col_2:
-        st.metric("训练目标", goal or "未填写")
+        st.metric("训练目标", member.goal or "未填写")
     with metric_col_3:
-        st.metric("最近训练", last_training_date or "暂无")
+        st.metric("最近训练", member.last_training_date or "暂无")
 
     recent_sessions = get_recent_training_context(coach_id, member_id, limit=5)
-    exercise_names = get_exercise_library_names()
+    exercise_names = [item.name for item in repository.list_exercises(coach) if item.name]
 
     st.subheader("最近训练摘要")
     if not recent_sessions:

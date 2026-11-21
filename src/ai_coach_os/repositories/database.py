@@ -1,4 +1,8 @@
-"""SQLite schema bootstrap and connection helpers."""
+"""SQLite schema bootstrap and connection helpers.
+
+SQLite has no native table/column comments. See docs/DATABASE_FIELDS.md for the
+field descriptions of the current database, including legacy columns.
+"""
 
 import sqlite3
 from datetime import date, datetime, timedelta

@@ -20,6 +20,7 @@ except ModuleNotFoundError:
 
 from ai_coach_os import auth
 from ai_coach_os.repositories import database
+from ai_coach_os.repositories.contracts import CoachContext, CoachReadRepository, ExerciseOption, MemberDetail
 from ai_coach_os.repositories.member_data import parse_training_text
 from ai_coach_os.services.structured_output import StructuredOutputResult, TrainingParseOutput
 from ai_coach_os.ui import training_draft as draft
@@ -108,7 +109,7 @@ class FakeUI:
 
 class TrainingDraftTests(unittest.TestCase):
     def setUp(self):
-        self.state = State(coach_id="wenwen", training_state_owner=("wenwen", 1))
+        self.state = State(coach_id="wenwen", selected_member_id=1, training_state_owner=("wenwen", 1))
         self.state["training_1_raw"] = RAW
         self.ui = FakeUI(self.state)
         self.stack = ExitStack()
@@ -117,8 +118,10 @@ class TrainingDraftTests(unittest.TestCase):
             self.stack.enter_context(mock.patch.object(module, "st", self.ui))
         for name in ("inject_css", "render_sidebar", "render_page_header"):
             self.stack.enter_context(mock.patch.object(training, name))
-        self.stack.enter_context(mock.patch.object(training, "get_current_member", return_value=(1, "王五", 5, "", "", "", "", "")))
-        self.library = self.stack.enter_context(mock.patch.object(training, "get_exercise_options", return_value=OPTIONS))
+        self.repository = mock.Mock(spec=CoachReadRepository)
+        self.repository.get_member.return_value = MemberDetail(1, "王五", 5, "", "", "", "", "")
+        self.library = self.repository.list_exercises
+        self.library.return_value = [ExerciseOption(*option) for option in OPTIONS]
         self.save = self.stack.enter_context(mock.patch.object(training, "save_training_session", return_value=(123, True)))
         self.update = self.stack.enter_context(mock.patch.object(training, "update_training_session"))
         self.ai = self.stack.enter_context(mock.patch.object(training, "generate_training_structured_output", return_value=self.result()))
@@ -135,7 +138,7 @@ class TrainingDraftTests(unittest.TestCase):
         self.state.rendered.clear()
         self.ui.clicked = set(buttons)
         try:
-            training.start_training_page()
+            training.start_training_page(self.repository, CoachContext(self.state.coach_id))
         except Rerun:
             pass
         finally:
@@ -216,8 +219,9 @@ class TrainingDraftTests(unittest.TestCase):
 
     def test_member_change_removes_draft(self):
         self.run_page("AI智能解析")
-        with mock.patch.object(training, "get_current_member", return_value=(2, "李梅", 5, "", "", "", "", "")):
-            self.run_page()
+        self.state.selected_member_id = 2
+        self.repository.get_member.return_value = MemberDetail(2, "李梅", 5, "", "", "", "", "")
+        self.run_page()
         self.assertNotIn("training_parse_draft", self.state)
         self.assertEqual(self.state["training_parse_owner"], ("wenwen", 2))
 

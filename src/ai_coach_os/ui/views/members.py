@@ -8,13 +8,13 @@ from datetime import date
 import streamlit as st
 
 from ...repositories.appointments import get_next_appointment_for_member
+from ...repositories.contracts import CoachContext, CoachReadRepository
 from ...repositories.member_data import (
     add_member,
     add_member_lessons,
     create_body_measurement,
     get_body_measurements_for_member,
     get_latest_body_measurement,
-    get_members_with_today_plan,
     get_today_plan_for_member,
     update_member_contact_note,
 )
@@ -38,11 +38,11 @@ from .shell import (
 
 logger = logging.getLogger(__name__)
 
-def member_list_page():
+def member_list_page(repository: CoachReadRepository, coach: CoachContext):
     inject_css()
     render_sidebar()
 
-    coach_id = st.session_state.coach_id
+    coach_id = coach.coach_id
 
     render_page_header(
         eyebrow="会员目录",
@@ -97,7 +97,11 @@ def member_list_page():
         label_visibility="collapsed"
     )
 
-    all_members = get_members_with_today_plan(coach_id)
+    all_members = repository.list_members(coach)
+    if any(not member.today_plan_available for member in all_members):
+        st.caption("当前数据源不提供今日预约摘要。")
+        if selected_filter == "今天有课":
+            return
     members = filter_members(all_members, keyword, selected_filter)
 
     st.markdown('<div class="soft-divider"></div>', unsafe_allow_html=True)
@@ -107,27 +111,17 @@ def member_list_page():
         return
 
     for member in members:
-        (
-            member_id,
-            name,
-            remaining_lessons,
-            goal,
-            last_training_date,
-            ai_reminder,
-            today_plan_time,
-        ) = member
-
         status_line = get_member_status_line(
-            remaining_lessons=remaining_lessons,
-            last_training_date=last_training_date,
-            ai_reminder=ai_reminder,
-            today_plan_time=today_plan_time
+            remaining_lessons=member.remaining_lessons,
+            last_training_date=member.last_training_date,
+            ai_reminder=member.ai_reminder,
+            today_plan_time=member.today_plan_time
         )
 
         badge_text, badge_color = get_status_badge(
-            remaining_lessons=remaining_lessons,
-            ai_reminder=ai_reminder,
-            today_plan_time=today_plan_time
+            remaining_lessons=member.remaining_lessons,
+            ai_reminder=member.ai_reminder,
+            today_plan_time=member.today_plan_time
         )
 
         col_info, col_action = st.columns([8, 1.4])
@@ -137,9 +131,9 @@ def member_list_page():
                 f"""
                 <div class="member-card">
                     <div class="badge badge-{badge_color}">{badge_text}</div>
-                    <div class="member-name">{name}</div>
+                    <div class="member-name">{member.name}</div>
                     <div class="member-status">{status_line}</div>
-                    <div class="member-meta">{remaining_lessons}课 · {goal if goal else "未填写"}</div>
+                    <div class="member-meta">{member.remaining_lessons}课 · {member.goal or "未填写"}</div>
                 </div>
                 """,
                 unsafe_allow_html=True
@@ -148,8 +142,8 @@ def member_list_page():
         with col_action:
             st.write("")
             st.write("")
-            if st.button("进入", key=f"enter_member_{member_id}", use_container_width=True):
-                st.session_state.selected_member_id = member_id
+            if st.button("进入", key=f"enter_member_{member.id}", use_container_width=True):
+                st.session_state.selected_member_id = member.id
                 st.session_state.page = "member_detail"
                 st.rerun()
 
@@ -158,12 +152,12 @@ def member_list_page():
 # 页面：会员主页
 # =========================
 
-def member_detail_page():
+def member_detail_page(repository: CoachReadRepository, coach: CoachContext):
     inject_css()
     render_sidebar()
 
-    coach_id = st.session_state.coach_id
-    member = get_current_member()
+    coach_id = coach.coach_id
+    member = get_current_member(repository, coach)
 
     if not member:
         st.error("没有找到该会员，或该会员不属于当前教练。")
@@ -171,24 +165,15 @@ def member_detail_page():
             back_to_member_list()
         return
 
-    (
-        member_id,
-        name,
-        remaining_lessons,
-        goal,
-        last_training_date,
-        ai_reminder,
-        phone,
-        note,
-    ) = member
+    member_id = member.id
 
     today_plan = get_today_plan_for_member(coach_id, member_id)
 
     if st.button("返回会员列表"):
         back_to_member_list()
 
-    render_page_header("会员主页", name, f"训练目标：{goal or '未填写'}")
-    st.markdown(f"**剩余课时：{remaining_lessons} 节**")
+    render_page_header("会员主页", member.name, f"训练目标：{member.goal or '未填写'}")
+    st.markdown(f"**剩余课时：{member.remaining_lessons} 节**")
 
     if today_plan:
         plan_time, status, content = today_plan
@@ -201,25 +186,25 @@ def member_detail_page():
             unsafe_allow_html=True
         )
 
-    if ai_reminder:
+    if member.ai_reminder:
         st.markdown(
             f"""
             <div class="notice-card">
-                {ai_reminder}
+                {member.ai_reminder}
             </div>
             """,
             unsafe_allow_html=True
         )
 
-    if note:
-        st.markdown(f"**会员备注 / 训练注意事项：** {note}")
+    if member.note:
+        st.markdown(f"**会员备注 / 训练注意事项：** {member.note}")
 
     if st.button("开始上课", type="primary", use_container_width=True):
         reset_training_state(member_id)
         st.session_state.page = "start_training"
         st.rerun()
 
-    st.caption(f"最近训练：{format_last_training(last_training_date)}")
+    st.caption(f"最近训练：{format_last_training(member.last_training_date)}")
     if st.button("训练历史", use_container_width=True):
         st.session_state.page = "training_history"
         st.rerun()
@@ -463,7 +448,7 @@ def member_detail_page():
     st.markdown('<div class="soft-divider"></div>', unsafe_allow_html=True)
 
     st.subheader("联系方式与资料")
-    st.write(f"联系电话：{phone or '未填写'}")
+    st.write(f"联系电话：{member.phone or '未填写'}")
 
     saved_flag_key = f"member_info_saved_{member_id}"
 
@@ -475,12 +460,12 @@ def member_detail_page():
         with st.form(f"edit_member_info_{member_id}"):
             new_phone = st.text_input(
                 "联系电话",
-                value="" if phone == "未填写" else (phone or "")
+                value="" if member.phone == "未填写" else (member.phone or "")
             )
 
             new_note = st.text_area(
                 "会员备注",
-                value=note or "",
+                value=member.note or "",
                 height=110,
                 placeholder="例如：腰椎不舒服，避免高负荷硬拉；喜欢晚上训练；沟通方式偏直接。"
             )

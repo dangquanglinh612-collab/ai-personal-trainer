@@ -8,11 +8,9 @@ from pathlib import Path
 
 import streamlit as st
 
+from ...repositories.contracts import CoachContext, CoachReadRepository
 from ...repositories.member_data import (
-    get_exercise_options,
-    get_exercises_for_session,
     get_training_photos_for_session,
-    get_training_sessions_for_member,
     parse_training_text,
     save_training_session,
     save_uploaded_training_photos,
@@ -129,11 +127,11 @@ def render_training_parser(raw_text, exercise_options, coach_id, member_id):
             st.info(state["training_parse_notice"])
 
 
-def start_training_page():
+def start_training_page(repository: CoachReadRepository, coach: CoachContext):
     inject_css()
     render_sidebar()
 
-    member = get_current_member()
+    member = get_current_member(repository, coach)
 
     if not member:
         st.error("没有选择会员。")
@@ -141,18 +139,9 @@ def start_training_page():
             back_to_member_list()
         return
 
-    (
-        member_id,
-        name,
-        remaining_lessons,
-        goal,
-        last_training_date,
-        ai_reminder,
-        phone,
-        note,
-    ) = member
-
-    coach_id = st.session_state.coach_id
+    member_id = member.id
+    remaining_lessons = member.remaining_lessons
+    coach_id = coach.coach_id
     owner = (coach_id, member_id)
     bind_training_parse_owner(st.session_state, coach_id, member_id)
     if st.session_state.get("training_state_owner") != owner:
@@ -168,13 +157,13 @@ def start_training_page():
 
     render_page_header(
         eyebrow="训练记录",
-        title=f"开始上课：{name}",
+        title=f"开始上课：{member.name}",
         subtitle="记录本次训练动作、训练反馈和教练备注。"
     )
 
     st.caption(
-        f"剩余 {remaining_lessons} 节课 · 目标：{goal or '未填写'} · "
-        f"最近训练：{format_last_training(last_training_date)}"
+        f"剩余 {remaining_lessons} 节课 · 目标：{member.goal or '未填写'} · "
+        f"最近训练：{format_last_training(member.last_training_date)}"
     )
 
     date_key = f"training_{member_id}_date"
@@ -195,7 +184,7 @@ def start_training_page():
         )
 
     try:
-        exercise_options = get_exercise_options()
+        exercise_options = repository.list_exercises(coach)
     except Exception:
         logger.exception("Exercise library query failed")
         exercise_options = None
@@ -211,10 +200,10 @@ def start_training_page():
         st.error("动作库加载失败或为空，请稍后重试。原文及已有训练表单已保留。")
         return
 
-    option_name_by_id = dict(exercise_options)
-    exercise_ids = [None] + [item[0] for item in exercise_options]
+    option_name_by_id = {option.id: option.name for option in exercise_options}
+    exercise_ids = [None, *option_name_by_id]
     with paste_section:
-        render_training_parser(raw_text, exercise_options, coach_id, member_id)
+        render_training_parser(raw_text, list(option_name_by_id.items()), coach_id, member_id)
 
     parsed_count = len(st.session_state.get("current_training_rows", []))
     if count_key not in st.session_state:
@@ -398,11 +387,11 @@ def start_training_page():
 # 页面：训练历史
 # =========================
 
-def training_history_page():
+def training_history_page(repository: CoachReadRepository, coach: CoachContext):
     inject_css()
     render_sidebar()
 
-    member = get_current_member()
+    member = get_current_member(repository, coach)
 
     if not member:
         st.error("没有选择会员。")
@@ -410,64 +399,49 @@ def training_history_page():
             back_to_member_list()
         return
 
-    (
-        member_id,
-        name,
-        remaining_lessons,
-        goal,
-        last_training_date,
-        ai_reminder,
-        phone,
-        note,
-    ) = member
-
     if st.button("返回会员主页"):
         back_to_member_detail()
 
     render_page_header(
         eyebrow="训练历史",
-        title=f"训练历史：{name}",
+        title=f"训练历史：{member.name}",
         subtitle="查看每节课的动作记录、会员反馈和教练备注。"
     )
 
-    sessions = get_training_sessions_for_member(st.session_state.coach_id, member_id)
+    sessions = repository.list_training_history(coach, member.id)
     if not sessions:
         st.info("暂无训练记录，首次训练后，记录会显示在这里。")
         return
 
     for session in sessions:
-        session_id, training_date, member_feedback, coach_note, raw_paste_text, created_at = session
-        with st.expander(f"{training_date} 训练记录"):
-            st.markdown(f"**会员反馈：** {member_feedback or '未填写'}")
-            st.markdown(f"**教练备注：** {coach_note or '未填写'}")
-            if raw_paste_text:
+        with st.expander(f"{session.training_date} 训练记录"):
+            st.markdown(f"**会员反馈：** {session.member_feedback or '未填写'}")
+            st.markdown(f"**教练备注：** {session.coach_note or '未填写'}")
+            if session.raw_paste_text:
                 st.caption("原始粘贴内容")
-                st.code(raw_paste_text, language=None)
+                st.code(session.raw_paste_text, language=None)
 
-            exercise_rows = get_exercises_for_session(
-                st.session_state.coach_id, session_id
-            )
-            if exercise_rows:
-                table_rows = []
-                for index, exercise in enumerate(exercise_rows, start=1):
-                    exercise_name, weight, sets, reps, rpe, exercise_note, sort_order = exercise
-                    table_rows.append({
+            if session.exercises:
+                table_rows = [
+                    {
                         "序号": index,
-                        "动作": exercise_name,
-                        "重量": weight,
-                        "组数": sets,
-                        "次数": reps,
-                        "RPE": rpe,
-                        "备注": exercise_note,
-                    })
+                        "动作": exercise.exercise_name,
+                        "重量": exercise.weight,
+                        "组数": exercise.sets,
+                        "次数": exercise.reps,
+                        "RPE": exercise.rpe,
+                        "备注": exercise.note,
+                    }
+                    for index, exercise in enumerate(session.exercises, start=1)
+                ]
                 st.dataframe(table_rows, use_container_width=True, hide_index=True)
             else:
                 st.caption("本节课没有动作明细。")
 
             session_photos = get_training_photos_for_session(
-                st.session_state.coach_id,
-                member_id,
-                session_id,
+                coach.coach_id,
+                member.id,
+                session.id,
             )
             if session_photos:
                 st.markdown("**训练照片**")

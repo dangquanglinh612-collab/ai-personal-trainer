@@ -26,6 +26,7 @@ from ai_coach_os import auth as _auth
 from ai_coach_os.repositories import appointments as _appointments
 from ai_coach_os.repositories import database as _database
 from ai_coach_os.repositories import member_data as _member_data
+from ai_coach_os.repositories.contracts import MemberSummary as _MemberSummary
 from ai_coach_os.services import ai as _ai
 from ai_coach_os.ui import helpers as _helpers
 from ai_coach_os.ui import pages as _pages
@@ -80,6 +81,14 @@ def __dir__() -> list[str]:
         if not name.startswith("__")
     }
     return sorted(set(globals()) | exported)
+
+
+def filter_members(members, keyword, selected_filter):
+    """Keep accepting the rows returned by the legacy member query."""
+    rows = list(members)
+    summaries = [_MemberSummary(*row) for row in rows]
+    matched = set(_helpers.filter_members(summaries, keyword, selected_filter))
+    return [row for row, summary in zip(rows, summaries) if summary in matched]
 
 
 def main() -> None:

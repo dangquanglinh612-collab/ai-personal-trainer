@@ -8,11 +8,8 @@ from datetime import date, timedelta
 
 import streamlit as st
 
-from ...repositories.member_data import (
-    get_exercise_options,
-    get_member_by_id,
-    get_recent_training_context,
-)
+from ...repositories.contracts import CoachContext, CoachReadRepository
+from ...repositories.member_data import get_recent_training_context
 from ...services.ai import (
     _plan_text,
     build_ai_plan_prompt,
@@ -37,7 +34,7 @@ from .shell import (
 logger = logging.getLogger(__name__)
 
 
-def training_plans_page():
+def training_plans_page(repository: CoachReadRepository, coach: CoachContext):
     inject_css()
     render_sidebar()
 
@@ -48,26 +45,24 @@ def training_plans_page():
             back_to_member_list()
         return
 
-    coach_id = st.session_state.coach_id
-    member = get_member_by_id(coach_id, selected_member_id)
-    if not member:
+    coach_id = coach.coach_id
+    member = repository.get_member(coach, selected_member_id)
+    if member is None:
         st.error("会员不存在或不属于当前教练。")
         if st.button("返回会员列表"):
             back_to_member_list()
         return
-
-    member_id, name, *_ = member
 
     if st.button("返回会员主页"):
         back_to_member_detail()
 
     render_page_header(
         eyebrow="训练计划",
-        title=f"训练计划：{name}",
+        title=f"训练计划：{member.name}",
         subtitle="查看教练确认保存的训练内容。训练计划不会自动变成训练记录，也不会自动扣课。",
     )
 
-    plans = get_training_plans_for_member(coach_id, member_id)
+    plans = get_training_plans_for_member(coach_id, member.id)
     if not plans:
         st.info("暂无训练计划。可以先使用 AI 下次训练计划生成草稿。")
         if st.button(
@@ -116,7 +111,7 @@ def training_plans_page():
                 st.caption("该计划暂无动作明细。")
 
 
-def ai_plan_page():
+def ai_plan_page(repository: CoachReadRepository, coach: CoachContext):
     inject_css()
     render_sidebar()
 
@@ -127,9 +122,9 @@ def ai_plan_page():
             back_to_member_list()
         return
 
-    coach_id = st.session_state.coach_id
-    member = get_member_by_id(coach_id, selected_member_id)
-    if not member:
+    coach_id = coach.coach_id
+    member = repository.get_member(coach, selected_member_id)
+    if member is None:
         st.error("会员不存在或不属于当前教练。")
         if st.button("返回会员列表"):
             back_to_member_list()
@@ -160,23 +155,14 @@ def ai_plan_page():
             if any(str(state_key).startswith(marker) for marker in member_widget_markers):
                 del st.session_state[state_key]
 
-    (
-        member_id,
-        name,
-        remaining_lessons,
-        goal,
-        last_training_date,
-        ai_reminder,
-        phone,
-        note,
-    ) = member
+    member_id = member.id
 
     if st.button("返回会员主页"):
         back_to_member_detail()
 
     render_page_header(
         eyebrow="AI 排课草稿",
-        title=f"AI 下次训练计划：{name}",
+        title=f"AI 下次训练计划：{member.name}",
         subtitle=(
             "基于会员档案、最近训练记录、AI 分析报告和动作库，生成下次训练计划草稿。"
             "教练确认后才会保存为正式计划。"
@@ -184,16 +170,16 @@ def ai_plan_page():
     )
 
     metric_col_1, metric_col_2, metric_col_3 = st.columns(3)
-    metric_col_1.metric("剩余课时", f"{remaining_lessons} 节")
-    metric_col_2.metric("训练目标", goal or "未填写")
-    metric_col_3.metric("最近训练", last_training_date or "暂无")
+    metric_col_1.metric("剩余课时", f"{member.remaining_lessons} 节")
+    metric_col_2.metric("训练目标", member.goal or "未填写")
+    metric_col_3.metric("最近训练", member.last_training_date or "暂无")
 
     recent_sessions = get_recent_training_context(
         coach_id, member_id, limit=5
     )
     latest_ai_report = get_latest_ai_analysis_report(coach_id, member_id)
-    exercise_options = get_exercise_options()
-    exercise_names = [item[1] for item in exercise_options]
+    exercise_options = repository.list_exercises(coach)
+    exercise_names = [item.name for item in exercise_options]
 
     st.subheader("最近训练摘要")
     if recent_sessions:
@@ -293,16 +279,13 @@ def ai_plan_page():
                 exercise_names=exercise_names,
                 extra_note=extra_note,
             )
-            normalized_rows = normalize_ai_plan_to_rows(
-                ai_plan, exercise_options
-            )
+            legacy_options = [(item.id, item.name) for item in exercise_options]
+            normalized_rows = normalize_ai_plan_to_rows(ai_plan, legacy_options)
             if not normalized_rows:
                 ai_plan = generate_fallback_training_plan(
                     member, recent_sessions, exercise_names, extra_note
                 )
-                normalized_rows = normalize_ai_plan_to_rows(
-                    ai_plan, exercise_options
-                )
+                normalized_rows = normalize_ai_plan_to_rows(ai_plan, legacy_options)
             if not normalized_rows:
                 raise ValueError("未能生成有效动作")
 
@@ -393,8 +376,8 @@ def ai_plan_page():
             key=f"ai_plan_exercise_count_{member_id}",
         )
 
-        option_name_by_id = dict(exercise_options)
-        exercise_ids = [item[0] for item in exercise_options]
+        option_name_by_id = {item.id: item.name for item in exercise_options}
+        exercise_ids = list(option_name_by_id)
         rpe_options = ["请选择"] + [str(value) for value in range(1, 11)]
         edited_rows = []
 

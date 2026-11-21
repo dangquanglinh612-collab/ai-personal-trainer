@@ -11,7 +11,7 @@ import sys
 import tempfile
 import types
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
@@ -21,7 +21,8 @@ except ModuleNotFoundError:
     sys.modules["streamlit"] = types.SimpleNamespace(secrets={}, session_state={}, set_page_config=lambda **kwargs: None)
 
 from ai_coach_os.repositories import database
-from ai_coach_os.services.supabase_client import SupabaseSettings, SupabaseSession, SupabaseRepository, create_public_client
+from ai_coach_os.repositories.contracts import CoachContext, ExerciseOption
+from ai_coach_os.services.supabase_client import AuthenticatedSupabase, SupabaseSettings, SupabaseSession, SupabaseRepository, create_public_client
 
 spec = importlib.util.spec_from_file_location("migration", ROOT / "scripts/migrate_sqlite_to_supabase.py")
 migration = importlib.util.module_from_spec(spec)
@@ -261,11 +262,14 @@ class SupabaseAdapterTests(unittest.TestCase):
         self.state = {}
         self.client = MagicMock()
         self.client.auth.get_user.return_value.user.id = A
-        response = types.SimpleNamespace(session=types.SimpleNamespace(access_token="new-access", refresh_token="new-refresh"))
+        self.client.auth.get_user.return_value.user.is_anonymous = False
+        response = types.SimpleNamespace(session=types.SimpleNamespace(
+            access_token="new-access", refresh_token="new-refresh", expires_at=4_000_000_000,
+        ))
         self.client.auth.sign_in_with_password.return_value = response
         self.client.auth.set_session.return_value = response
         self.factory = MagicMock(return_value=self.client)
-        self.session = SupabaseSession(self.settings, self.state, self.factory)
+        self.session = SupabaseSession(self.settings, self.state, {A}, self.factory)
 
     def test_application_rejects_secret_key(self):
         with self.assertRaises(ValueError):
@@ -299,51 +303,177 @@ class SupabaseAdapterTests(unittest.TestCase):
         self.assertEqual(self.state["coach_id"], A)
         self.assertNotIn("training_parse_draft", self.state)
         self.assertNotIn("plan_widget", self.state)
-        self.client.table.assert_called_with("profiles")
+        self.client.table.assert_not_called()
 
     def test_restore_persists_rotated_tokens(self):
-        self.state.update(access_token="old", refresh_token="old-refresh", coach_id=A)
+        self.session.login("a", "b")
+        self.state.update(access_token="old", refresh_token="old-refresh")
         self.session.restore()
         self.client.auth.set_session.assert_called_once_with("old", "old-refresh")
         self.assertEqual(self.state["refresh_token"], "new-refresh")
 
     def test_refresh_failure_clears_all_state_and_redacts_exception(self):
-        self.state.update(access_token="old", refresh_token="old", training_parse_draft="private")
-        self.client.auth.set_session.side_effect = RuntimeError("secret_internal")
+        self.session.login("a", "b")
+        self.state.update(auth_expires_at=0, training_parse_draft="private")
+        self.client.auth.refresh_session.side_effect = RuntimeError("secret_internal")
         with self.assertRaisesRegex(ValueError, "登录状态失效") as error:
             self.session.restore()
         self.assertNotIn("secret_internal", str(error.exception))
+        self.client.auth.refresh_session.assert_called_once_with("new-refresh")
         self.assertEqual(self.state, {})
 
     def test_logout_clears_even_when_signout_fails(self):
         self.session.login("a", "b")
-        self.client.auth.sign_out.side_effect = RuntimeError("offline")
+        self.client.auth.admin.sign_out.side_effect = RuntimeError("offline")
         self.session.logout()
         self.assertEqual(self.state, {})
+        self.client.auth.admin.sign_out.assert_called_once_with("new-access", "local")
+        self.factory.assert_called_once()
 
     def test_distinct_browser_states_do_not_share_tokens(self):
         other_state = {"coach_id": B}
-        other = SupabaseSession(self.settings, other_state, self.factory)
+        other = SupabaseSession(self.settings, other_state, {B}, self.factory)
         self.session.login("a", "b")
         self.assertEqual(other.state, {"coach_id": B})
 
     def test_training_uses_one_transaction_rpc(self):
-        repo = SupabaseRepository(self.client)
+        repo = SupabaseRepository(AuthenticatedSupabase(self.client, CoachContext(A)))
         repo.save_training_session(1, "2026-09-14", "", "", "", [])
         self.client.rpc.assert_called_once()
         self.assertNotIn("coach_id", self.client.rpc.call_args.args[1])
         self.client.table.assert_not_called()
 
     def test_storage_cross_owner_path_rejected_before_network(self):
-        repo = SupabaseRepository(self.client)
+        repo = SupabaseRepository(AuthenticatedSupabase(self.client, CoachContext(A)))
         with self.assertRaises(ValueError):
             repo.photo_url(f"{B}/1/1/a.jpg")
         self.client.storage.from_.assert_not_called()
 
     def test_storage_url_has_short_expiry(self):
-        repo = SupabaseRepository(self.client)
+        repo = SupabaseRepository(AuthenticatedSupabase(self.client, CoachContext(A)))
         repo.photo_url(f"{A}/1/1/a.jpg")
         self.client.storage.from_.return_value.create_signed_url.assert_called_once_with(f"{A}/1/1/a.jpg", 300)
+
+
+class SupabaseReadRepositoryTests(unittest.TestCase):
+    def setUp(self):
+        self.client = MagicMock(spec_set=["auth", "table"])
+        self.client.auth.get_user.return_value.user.id = A
+        self.query = MagicMock(spec_set=["select", "eq", "order", "limit", "execute"])
+        for method in ("select", "eq", "order", "limit"):
+            getattr(self.query, method).return_value = self.query
+        self.client.table.return_value = self.query
+        self.coach = CoachContext(A)
+        self.repo = SupabaseRepository(AuthenticatedSupabase(self.client, self.coach))
+        sqlite_connect = patch.object(sqlite3, "connect", side_effect=AssertionError("SQLite access forbidden"))
+        sqlite_connect.start()
+        self.addCleanup(sqlite_connect.stop)
+
+    def test_member_projection_and_absent_member(self):
+        row = {
+            "id": 5, "name": "Test Member", "remaining_lessons": 0, "goal": "",
+            "last_training_date": None, "ai_reminder": "",
+        }
+        self.query.execute.return_value.data = [row]
+        summary, = self.repo.list_members(self.coach)
+        self.assertEqual(summary.remaining_lessons, 0)
+        self.assertIsNone(summary.last_training_date)
+        self.assertIsNone(summary.today_plan_time)
+        self.assertFalse(summary.today_plan_available)
+        self.client.table.assert_called_once_with("members")
+        self.query.select.assert_called_once_with("id,name,remaining_lessons,goal,last_training_date,ai_reminder")
+        self.query.eq.assert_called_once_with("coach_id", A)
+        self.query.order.assert_called_once_with("id", desc=True)
+
+        self.query.reset_mock()
+        self.query.execute.return_value.data = [
+            dict(row, phone="555-0101", note="coach note", created_at="2026-01-01T00:00:00Z",
+                 avatar_emoji="🏃"),
+        ]
+        detail = self.repo.get_member(self.coach, 5)
+        self.assertEqual(detail.note, "coach note")
+        self.assertEqual(detail.phone, "555-0101")
+        self.assertEqual(detail.created_at, "2026-01-01T00:00:00Z")
+        self.assertEqual(detail.avatar_emoji, "🏃")
+        self.query.select.assert_called_once_with(
+            "id,name,remaining_lessons,goal,last_training_date,ai_reminder,phone,note,created_at,avatar_emoji"
+        )
+        self.assertEqual(self.query.eq.call_args_list, [call("coach_id", A), call("id", 5)])
+        self.query.limit.assert_called_once_with(1)
+
+        self.query.execute.return_value.data = []
+        self.assertIsNone(self.repo.get_member(self.coach, 404))
+        self.assertEqual(self.repo.list_members(self.coach), [])
+
+    def test_member_detail_rejects_invalid_ids_before_query(self):
+        for invalid in ("5", True, 0, -1, 2**63):
+            with self.subTest(member_id=invalid):
+                with self.assertRaisesRegex(ValueError, "会员编号无效"):
+                    self.repo.get_member(self.coach, invalid)
+        self.client.table.assert_not_called()
+
+    def test_history_reads_scoped_parent_with_ordered_details_and_empty_exercises(self):
+        session = {
+            "id": 8, "training_date": "2026-11-16", "created_at": "2026-11-16T04:00:00+00:00",
+            "member_feedback": "", "coach_note": "", "raw_paste_text": "",
+        }
+        exercise = {
+            "exercise_name": "Squat", "weight": "30", "sets": "3", "reps": "8",
+            "rpe": "7", "note": "", "sort_order": 0,
+        }
+        self.query.execute.return_value.data = [
+            dict(session, training_session_exercises=[exercise, dict(exercise, exercise_name="Row", sort_order=1)]),
+            dict(session, id=6, training_session_exercises=[]),
+        ]
+
+        history = self.repo.list_training_history(self.coach, 5)
+
+        self.assertEqual([item.id for item in history], [8, 6])
+        self.assertIsInstance(history[0].exercises, tuple)
+        self.assertEqual([item.exercise_name for item in history[0].exercises], ["Squat", "Row"])
+        self.assertEqual(history[1].exercises, ())
+        self.client.table.assert_called_once_with("training_sessions")
+        self.query.select.assert_called_once_with(
+            "id,training_date,member_feedback,coach_note,raw_paste_text,created_at,"
+            "training_session_exercises(exercise_name,weight,sets,reps,rpe,note,sort_order)"
+        )
+        self.assertEqual(self.query.eq.call_args_list, [call("coach_id", A), call("member_id", 5)])
+        self.assertEqual(self.query.order.call_args_list, [
+            call("training_date", desc=True), call("id", desc=True),
+            call("sort_order", nullsfirst=True, foreign_table="training_session_exercises"),
+            call("id", foreign_table="training_session_exercises"),
+        ])
+        self.query.execute.assert_called_once()
+
+        self.query.execute.return_value.data = []
+        self.assertEqual(self.repo.list_training_history(self.coach, 404), [])
+
+    def test_shared_exercise_catalog_and_remote_error_without_sqlite_fallback(self):
+        self.query.execute.return_value.data = [{"id": 3, "name": "Squat"}]
+        self.assertEqual(self.repo.list_exercises(self.coach), [ExerciseOption(3, "Squat")])
+        self.client.table.assert_called_once_with("exercise_library")
+        self.query.select.assert_called_once_with("id,name")
+        self.query.eq.assert_not_called()
+        self.query.order.assert_called_once_with("id")
+
+        self.query.execute.return_value.data = []
+        self.assertEqual(self.repo.list_exercises(self.coach), [])
+        self.query.execute.side_effect = ConnectionError("test connection failure")
+        with self.assertRaises(ConnectionError):
+            self.repo.list_exercises(self.coach)
+
+    def test_all_reads_reject_mismatched_or_invalid_coach_before_query(self):
+        for method, args in (
+            (self.repo.list_members, ()), (self.repo.get_member, (5,)),
+            (self.repo.list_training_history, (5,)), (self.repo.list_exercises, ()),
+        ):
+            with self.subTest(method=method.__name__):
+                with self.assertRaises(PermissionError):
+                    method(CoachContext(B), *args)
+                with self.assertRaises(TypeError):
+                    method(A, *args)
+        self.client.table.assert_not_called()
+        self.assertEqual(self.client.auth.mock_calls, [])
 
 
 class SQLContractTests(unittest.TestCase):
